@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "131749883739",
+    "project_id": "shayak-setu",
+    "storage_bucket": "shayak-setu.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:131749883739:android:70374bb2d1ac9804ab347e",
+        "android_client_info": {
+          "package_name": "com.example.sahayak_setu"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBOyMyCWEVHgrkP5GEyCXBkF2EmekZln4A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
