@@ -124,7 +124,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// --- DASHBOARD SCREEN (Now inside main.dart) ---
+// --- REAL-TIME DASHBOARD SCREEN ---
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
@@ -137,25 +137,67 @@ class DashboardScreen extends StatelessWidget {
         foregroundColor: Colors.white,
       ),
       backgroundColor: Colors.grey[100],
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            elevation: 3,
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: Colors.teal[100],
-                child: const Text("RD", style: TextStyle(color: Colors.teal)),
-              ),
-              title: const Text("Riya Devi"),
-              subtitle: const Text("BP: 120/80 • Pregnant (3 Months)"),
-              trailing: const Icon(Icons.chevron_right),
-            ),
-          ),
-        ],
+      
+      // STREAMBUILDER: This is the bridge to Firebase!
+      body: StreamBuilder(
+        // Listen to the 'patients' collection
+        stream: FirebaseFirestore.instance.collection('patients').snapshots(),
+        builder: (context, snapshot) {
+          // 1. Loading State (Waiting for internet)
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          // 2. Error State (Permission denied or no internet first run)
+          if (snapshot.hasError) {
+            return const Center(child: Text("Error loading data."));
+          }
+
+          // 3. Empty State (Database is empty)
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text("No patients found. Add one!"));
+          }
+
+          // 4. Success State (We have data!)
+          var docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              // Get the data for this specific row
+              var data = docs[index].data();
+              
+              return Card(
+                elevation: 3,
+                margin: const EdgeInsets.only(bottom: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.teal[100],
+                    child: Text(
+                      // Get first letter of name (or "?" if name is missing)
+                      (data['name'] ?? "?")[0].toUpperCase(),
+                      style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  title: Text(
+                    data['name'] ?? "Unknown Name", 
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(data['condition'] ?? "No condition listed"),
+                  trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                ),
+              );
+            },
+          );
+        },
       ),
+      
       floatingActionButton: FloatingActionButton(
-        onPressed: () {},
+        onPressed: () {
+          // We will hook this up to an "Add Patient" form next!
+        },
         backgroundColor: Colors.teal,
         child: const Icon(Icons.add, color: Colors.white),
       ),
