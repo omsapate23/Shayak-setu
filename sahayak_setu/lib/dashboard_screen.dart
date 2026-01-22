@@ -1,3 +1,4 @@
+import 'profile_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -7,10 +8,23 @@ class DashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+    appBar: AppBar(
         title: const Text("ASHA Dashboard"),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
+        actions: [
+          // PROFILE ICON BUTTON
+          IconButton(
+            icon: const Icon(Icons.account_circle, size: 30),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ProfileScreen()),
+              );
+            },
+          ),
+          const SizedBox(width: 10), // A little spacing
+        ],
       ),
       backgroundColor: Colors.grey[100],
       
