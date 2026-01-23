@@ -44,6 +44,10 @@
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>We need access to the microphone for AI voice input.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>We need permission to transcribe your voice.</string>
 	<true/>
 </dict>
 </plist>
