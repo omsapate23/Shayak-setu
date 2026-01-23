@@ -76,39 +76,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isListening = false);
   }
 
-  // --- 3. AI EXTRACTION (Voice -> Name, Disease, Condition Dropdown) ---
+// --- 3. ROBUST AI EXTRACTION (Finds JSON inside text) ---
   Future<void> _extractDataWithGemini(String spokenText) async {
     if (spokenText.trim().isEmpty) return;
 
     final model = GenerativeModel(model: 'gemini-pro', apiKey: _apiKey);
     
-    // UPDATED PROMPT: Asks AI to map the condition to the 3 options
     final prompt = '''
-      Extract patient details from this voice input: "$spokenText".
+      Act as a data parser. Extract details from: "$spokenText".
       
-      Rules:
-      1. 'disease': The specific illness (e.g., Fever, Cold).
-      2. 'condition': Map strictly to one of these three: "Fit", "Moderate", or "Risky".
-         - If symptom is mild -> "Fit"
-         - If symptom is bad -> "Moderate"
-         - If symptom is severe/emergency -> "Risky"
+      Return a JSON object with these exact keys:
+      - "name": Patient name (or "Unknown" if missing)
+      - "disease": The symptom/disease mentioned
+      - "condition": EXACTLY one of ["Fit", "Moderate", "Risky"] based on severity.
       
-      Return ONLY JSON: {"name": "...", "disease": "...", "condition": "..."}
+      Example Output: {"name": "Raju", "disease": "Fever", "condition": "Moderate"}
     ''';
 
     try {
       final response = await model.generateContent([Content.text(prompt)]);
-      print("AI Response: ${response.text}");
+      print("Raw AI Response: ${response.text}"); // Debug print
 
-      String cleanJson = response.text!.replaceAll('```json', '').replaceAll('```', '');
-      final data = jsonDecode(cleanJson);
+      // --- THE FIX: SURGICAL JSON EXTRACTION ---
+      // This finds the first "{" and the last "}" to ignore any extra text
+      final String rawText = response.text!;
+      final int startIndex = rawText.indexOf('{');
+      final int endIndex = rawText.lastIndexOf('}');
+
+      if (startIndex == -1 || endIndex == -1) {
+        throw Exception("No JSON found in response");
+      }
+
+      final String jsonString = rawText.substring(startIndex, endIndex + 1);
+      final Map<String, dynamic> data = jsonDecode(jsonString);
+      // -----------------------------------------
 
       setState(() {
         _nameController.text = data['name'] ?? "";
-        _diseaseController.text = data['disease'] ?? ""; // Fill Disease
+        _diseaseController.text = data['disease'] ?? ""; 
         
-        // Auto-select Dropdown (Ensure it matches one of our options)
+        // Smart Dropdown Selection
         String aiCondition = data['condition'] ?? "Moderate";
+        // Capitalize first letter just in case (e.g. "risky" -> "Risky")
+        aiCondition = aiCondition[0].toUpperCase() + aiCondition.substring(1).toLowerCase();
+        
         if (_conditionOptions.contains(aiCondition)) {
           _selectedCondition = aiCondition;
         } else {
@@ -117,10 +128,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         
         _isAiProcessing = false;
       });
+
     } catch (e) {
-      print("AI Error: $e");
+      print("JSON Parse Error: $e");
       setState(() {
-        _diseaseController.text = "Error extracting";
+        _diseaseController.text = "Error: Try speaking clearly";
         _isAiProcessing = false;
       });
     }
