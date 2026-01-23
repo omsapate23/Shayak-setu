@@ -5,6 +5,7 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'dart:convert';
 import 'profile_screen.dart'; 
 import 'api_key.dart'; // Ensure you have your API key here
+import 'package:http/http.dart' as http; // Add this
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -76,56 +77,105 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isListening = false);
   }
 
-  // --- 3. AI EXTRACTION (Voice -> Name, Disease, Condition Dropdown) ---
+// --- 3. DIRECT API EXTRACTION (Hackathon-Proof Fix) ---
   Future<void> _extractDataWithGemini(String spokenText) async {
     if (spokenText.trim().isEmpty) return;
 
-    final model = GenerativeModel(model: 'gemini-pro', apiKey: _apiKey);
-    
-    // UPDATED PROMPT: Asks AI to map the condition to the 3 options
-    final prompt = '''
-      Extract patient details from this voice input: "$spokenText".
-      
-      Rules:
-      1. 'disease': The specific illness (e.g., Fever, Cold).
-      2. 'condition': Map strictly to one of these three: "Fit", "Moderate", or "Risky".
-         - If symptom is mild -> "Fit"
-         - If symptom is bad -> "Moderate"
-         - If symptom is severe/emergency -> "Risky"
-      
-      Return ONLY JSON: {"name": "...", "disease": "...", "condition": "..."}
-    ''';
+    // 1. Show Loading Spinner
+    setState(() => _isAiProcessing = true);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
 
     try {
-      final response = await model.generateContent([Content.text(prompt)]);
-      print("AI Response: ${response.text}");
+      // 2. Prepare the Request (Directly to Google's Server)
+      final apiKey = _apiKey; 
+      final url = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey');
 
-      String cleanJson = response.text!.replaceAll('```json', '').replaceAll('```', '');
-      final data = jsonDecode(cleanJson);
-
-      setState(() {
-        _nameController.text = data['name'] ?? "";
-        _diseaseController.text = data['disease'] ?? ""; // Fill Disease
-        
-        // Auto-select Dropdown (Ensure it matches one of our options)
-        String aiCondition = data['condition'] ?? "Moderate";
-        if (_conditionOptions.contains(aiCondition)) {
-          _selectedCondition = aiCondition;
-        } else {
-          _selectedCondition = "Moderate"; // Fallback
-        }
-        
-        _isAiProcessing = false;
+      final headers = {'Content-Type': 'application/json'};
+      
+      // 3. The Prompt (Strict JSON)
+      final body = jsonEncode({
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": '''
+                Act as a medical data parser.
+                Input: "$spokenText"
+                
+                Extract these fields and return strictly valid JSON:
+                {
+                  "name": "Patient Name (or Unknown)",
+                  "disease": "Symptoms or Disease mentioned",
+                  "condition": "Fit", "Moderate", or "Risky" (Choose based on severity)
+                }
+                
+                Do not add markdown formatting like ```json. Just return the raw JSON object.
+                '''
+              }
+            ]
+          }
+        ]
       });
+
+      // 4. Send to Google
+      print("Sending request to Gemini...");
+      final response = await http.post(url, headers: headers, body: body);
+      
+      // Close Loading Spinner
+      Navigator.pop(context);
+
+      if (response.statusCode == 200) {
+        // 5. Parse the Response
+        final jsonResponse = jsonDecode(response.body);
+        final text = jsonResponse['candidates'][0]['content']['parts'][0]['text'];
+        
+        print("Raw AI Response: $text");
+
+        // Clean up any accidental Markdown
+        String cleanJson = text.replaceAll('```json', '').replaceAll('```', '').trim();
+        final data = jsonDecode(cleanJson);
+
+        // 6. Update UI
+        setState(() {
+          _nameController.text = data['name'] ?? "";
+          _diseaseController.text = data['disease'] ?? "";
+          
+          String aiCondition = data['condition'] ?? "Moderate";
+          // Capitalize for dropdown match
+          aiCondition = aiCondition[0].toUpperCase() + aiCondition.substring(1).toLowerCase();
+          
+          if (_conditionOptions.contains(aiCondition)) {
+            _selectedCondition = aiCondition;
+          } else {
+            _selectedCondition = "Moderate";
+          }
+          _isAiProcessing = false;
+        });
+        
+      } else {
+        throw Exception("API Error: ${response.statusCode} - ${response.body}");
+      }
+
     } catch (e) {
-      print("AI Error: $e");
-      setState(() {
-        _diseaseController.text = "Error extracting";
-        _isAiProcessing = false;
-      });
+      if (Navigator.canPop(context)) Navigator.pop(context); // Close spinner if open
+      print("❌ AI Error: $e");
+      
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Connection Error"),
+          content: Text("Could not connect to AI.\n\nDetails: $e"),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+        ),
+      );
+      setState(() => _isAiProcessing = false);
     }
   }
-
   // --- 4. AI ADVISOR (Analyzes Disease + Condition Level) ---
   Future<void> _analyzeRiskAndSave(String name, String disease, String condition) async {
     // 1. Save to Firestore
