@@ -4,7 +4,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'dart:convert';
 import 'profile_screen.dart'; 
-import 'api_key.dart'; // Ensure you have your API key here
+import 'api_key.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -22,13 +22,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Form Controllers
   final _nameController = TextEditingController();
-  final _diseaseController = TextEditingController(); // NEW: Disease Field
+  final _diseaseController = TextEditingController();
   
   // Dropdown Logic
-  String? _selectedCondition; // NEW: Holds "Fit", "Moderate", or "Risky"
+  String? _selectedCondition; 
   final List<String> _conditionOptions = ['Fit', 'Moderate', 'Risky'];
 
-  // API Key (From api_key.dart or hardcoded)
+  // ⚠️ PASTE YOUR KEY DIRECTLY HERE FOR TESTING
+  // Once it works, we can move it back to api_key.dart
   final String _apiKey = geminiApiKey; 
 
   @override
@@ -41,8 +42,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _listenAndAutoFill(StateSetter setDialogState) async {
     if (!_isListening) {
       bool available = await _speech.initialize(
-        onStatus: (status) => print('Status: $status'),
-        onError: (errorNotification) => print('Error: $errorNotification'),
+        onStatus: (status) => print('Mic Status: $status'),
+        onError: (error) => print('Mic Error: $error'),
       );
 
       if (available) {
@@ -59,11 +60,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _isAiProcessing = true;
               });
               _stopListening();
-              _extractDataWithGemini(_voiceText); // Trigger AI
+              print("Voice captured: $_voiceText"); // DEBUG PRINT
+              _extractDataWithGemini(_voiceText); 
             }
           },
           localeId: "hi_IN", 
         );
+      } else {
+        print("Mic denied or not available");
       }
     } else {
       setDialogState(() => _isListening = false);
@@ -76,75 +80,99 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isListening = false);
   }
 
-// --- 3. ROBUST AI EXTRACTION (Finds JSON inside text) ---
+  // --- 3. ON-SCREEN DEBUGGING VERSION ---
   Future<void> _extractDataWithGemini(String spokenText) async {
     if (spokenText.trim().isEmpty) return;
 
-    final model = GenerativeModel(model: 'gemini-pro', apiKey: _apiKey);
+    // 1. Show "Thinking" Popup immediately
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        content: Row(children: [CircularProgressIndicator(), SizedBox(width: 20), Text("AI is thinking...")]),
+      ),
+    );
+
+    final model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: _apiKey);
     
+    // Explicit Prompt
     final prompt = '''
-      Act as a data parser. Extract details from: "$spokenText".
-      
-      Return a JSON object with these exact keys:
-      - "name": Patient name (or "Unknown" if missing)
-      - "disease": The symptom/disease mentioned
-      - "condition": EXACTLY one of ["Fit", "Moderate", "Risky"] based on severity.
-      
-      Example Output: {"name": "Raju", "disease": "Fever", "condition": "Moderate"}
+      Act as a JSON parser. 
+      Input: "$spokenText"
+      Output JSON ONLY: {"name": "...", "disease": "...", "condition": "Fit" or "Moderate" or "Risky"}
     ''';
 
     try {
       final response = await model.generateContent([Content.text(prompt)]);
-      print("Raw AI Response: ${response.text}"); // Debug print
+      
+      // Close the "Thinking" Popup
+      Navigator.pop(context); 
 
-      // --- THE FIX: SURGICAL JSON EXTRACTION ---
-      // This finds the first "{" and the last "}" to ignore any extra text
+      // 2. SHOW THE RAW AI ANSWER (To see if it works)
+      // If you see this popup, the API Key works!
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("🔍 AI Debug Info"),
+          content: SingleChildScrollView(child: Text("Raw AI said:\n\n${response.text}")),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Continue"))],
+        ),
+      );
+
+      // --- PARSING LOGIC ---
       final String rawText = response.text!;
       final int startIndex = rawText.indexOf('{');
       final int endIndex = rawText.lastIndexOf('}');
 
-      if (startIndex == -1 || endIndex == -1) {
-        throw Exception("No JSON found in response");
-      }
+      if (startIndex == -1) throw Exception("No JSON brackets found!");
 
       final String jsonString = rawText.substring(startIndex, endIndex + 1);
       final Map<String, dynamic> data = jsonDecode(jsonString);
-      // -----------------------------------------
 
       setState(() {
         _nameController.text = data['name'] ?? "";
         _diseaseController.text = data['disease'] ?? ""; 
         
-        // Smart Dropdown Selection
+        // Smart Dropdown
         String aiCondition = data['condition'] ?? "Moderate";
-        // Capitalize first letter just in case (e.g. "risky" -> "Risky")
         aiCondition = aiCondition[0].toUpperCase() + aiCondition.substring(1).toLowerCase();
         
         if (_conditionOptions.contains(aiCondition)) {
           _selectedCondition = aiCondition;
         } else {
-          _selectedCondition = "Moderate"; // Fallback
+          _selectedCondition = "Moderate"; 
         }
-        
         _isAiProcessing = false;
       });
 
     } catch (e) {
-      print("JSON Parse Error: $e");
+      // Close the loading popup if open
+      Navigator.pop(context);
+      
+      // 3. SHOW THE ERROR POPUP (To see why it failed)
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("❌ Error"),
+          content: Text(e.toString()),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+        ),
+      );
+      
       setState(() {
-        _diseaseController.text = "Error: Try speaking clearly";
+        _diseaseController.text = "Error: $e";
         _isAiProcessing = false;
       });
     }
   }
 
-  // --- 4. AI ADVISOR (Analyzes Disease + Condition Level) ---
+  // --- 4. AI ADVISOR ---
   Future<void> _analyzeRiskAndSave(String name, String disease, String condition) async {
     // 1. Save to Firestore
     await FirebaseFirestore.instance.collection('patients').add({
       'name': name,
       'disease': disease,
-      'condition': condition, // Saved as "Fit", "Moderate", etc.
+      'condition': condition,
       'timestamp': FieldValue.serverTimestamp(),
     });
 
@@ -157,23 +185,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     // 2. Ask Gemini for Advice
     final model = GenerativeModel(model: 'gemini-pro', apiKey: _apiKey);
-    final prompt = '''
-      Patient: $name. 
-      Problem: $disease.
-      Severity Status: $condition.
-      
-      Provide medical advice. Return ONLY JSON:
-      {
-        "advice_en": "Short advice in English",
-        "advice_hi": "Short advice in Hindi"
-      }
-    ''';
+    final prompt = 'Patient: $name. Problem: $disease. Severity: $condition. Provide short medical advice in English and Hindi. Return JSON: {"advice_en": "...", "advice_hi": "..."}';
 
     try {
       final response = await model.generateContent([Content.text(prompt)]);
       Navigator.pop(context); 
 
-      String cleanJson = response.text!.replaceAll('```json', '').replaceAll('```', '');
+      // Clean JSON again
+      String rawText = response.text!;
+      int start = rawText.indexOf('{');
+      int end = rawText.lastIndexOf('}');
+      String cleanJson = rawText.substring(start, end + 1);
+      
       final data = jsonDecode(cleanJson);
 
       if (mounted) {
@@ -182,7 +205,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           builder: (ctx) => AlertDialog(
             title: Row(
               children: [
-                // Icon changes based on the Dropdown selection
                 Icon(
                   condition == "Risky" ? Icons.warning : (condition == "Moderate" ? Icons.info : Icons.check_circle), 
                   color: condition == "Risky" ? Colors.red : (condition == "Moderate" ? Colors.orange : Colors.green)
@@ -212,13 +234,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // --- 5. UI: ADD PATIENT DIALOG ---
+ // --- 5. UI: ADD PATIENT DIALOG (With Manual Debug) ---
   void _showAddPatientDialog() {
     _nameController.clear();
     _diseaseController.clear();
-    _selectedCondition = null; // Reset Dropdown
+    _selectedCondition = null;
     _voiceText = "";
     _isAiProcessing = false;
+    
+    // Controller for the manual debug box
+    final TextEditingController debugInputController = TextEditingController();
 
     showDialog(
       context: context,
@@ -231,7 +256,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // MIC BUTTON
+                    // --- 1. MIC BUTTON ---
                     GestureDetector(
                       onTap: () => _listenAndAutoFill(setDialogState),
                       child: CircleAvatar(
@@ -241,33 +266,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text(_isListening ? "Listening..." : (_isAiProcessing ? "AI Selecting..." : "Tap Mic to Speak")),
-                    if (_voiceText.isNotEmpty) 
-                      Padding(padding: const EdgeInsets.all(8.0), child: Text("Heard: \"$_voiceText\"", style: const TextStyle(fontSize: 12, color: Colors.grey))),
+                    Text(_isListening ? "Listening..." : "Tap Mic to Speak"),
                     
-                    const SizedBox(height: 15),
+                    const Divider(height: 30),
                     
-                    // FIELD 1: NAME
+                    // --- 2. MANUAL DEBUG INPUT (The Fix) ---
+                    // Use this if Mic fails
+                    TextField(
+                      controller: debugInputController,
+                      decoration: InputDecoration(
+                        labelText: "Or type here to test AI",
+                        hintText: "e.g., 'Raju has severe fever'",
+                        filled: true,
+                        fillColor: Colors.grey[100],
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.send, color: Colors.teal),
+                          onPressed: () {
+                            // Force trigger the AI function manually
+                            if (debugInputController.text.isNotEmpty) {
+                              // Close the keyboard
+                              FocusScope.of(context).unfocus();
+                              // Call the AI function
+                              _extractDataWithGemini(debugInputController.text);
+                            }
+                          },
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    
+                    const Divider(height: 30),
+
+                    // --- 3. FORM FIELDS (Auto-filled by AI) ---
                     TextField(controller: _nameController, decoration: const InputDecoration(labelText: "Name", border: OutlineInputBorder())),
                     const SizedBox(height: 10),
                     
-                    // FIELD 2: DISEASE
                     TextField(controller: _diseaseController, decoration: const InputDecoration(labelText: "Disease / Symptoms", border: OutlineInputBorder())),
                     const SizedBox(height: 10),
                     
-                    // FIELD 3: CONDITION DROPDOWN
                     DropdownButtonFormField<String>(
-                      value: _selectedCondition,
+                      initialValue: _selectedCondition,
                       decoration: const InputDecoration(labelText: "Condition", border: OutlineInputBorder()),
                       items: _conditionOptions.map((String value) {
-                        return DropdownMenuItem<String>(
-                          value: value,
-                          child: Text(value),
-                        );
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
                       }).toList(),
-                      onChanged: (newValue) {
-                        setDialogState(() => _selectedCondition = newValue);
-                      },
+                      onChanged: (newValue) => setDialogState(() => _selectedCondition = newValue),
                     ),
                   ],
                 ),
@@ -291,69 +334,3 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
     );
   }
-
-  // --- 6. HELPER: COLOR FOR CHIPS ---
-  Color _getStatusColor(String condition) {
-    switch (condition) {
-      case 'Risky': return Colors.red;
-      case 'Moderate': return Colors.orange;
-      case 'Fit': return Colors.green;
-      default: return Colors.grey;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("ASHA Dashboard"), 
-        backgroundColor: Colors.teal, 
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen())),
-          )
-        ],
-      ),
-      body: StreamBuilder(
-        stream: FirebaseFirestore.instance.collection('patients').orderBy('timestamp', descending: true).snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: snapshot.data!.docs.length,
-            itemBuilder: (ctx, index) {
-              var data = snapshot.data!.docs[index].data();
-              String condition = data['condition'] ?? "Moderate"; // Default fallback
-              
-              return Card(
-                elevation: 3,
-                margin: const EdgeInsets.only(bottom: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: Colors.teal[50], 
-                    child: Text(data['name'][0].toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-                  ),
-                  title: Text(data['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text("Disease: ${data['disease'] ?? 'Unknown'}"),
-                  trailing: Chip(
-                    label: Text(condition, style: const TextStyle(color: Colors.white, fontSize: 12)),
-                    backgroundColor: _getStatusColor(condition),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.teal,
-        onPressed: _showAddPatientDialog,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
-    );
-  }
-}
