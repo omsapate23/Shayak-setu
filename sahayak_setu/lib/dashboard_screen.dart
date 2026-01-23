@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http; // HTTP Package
 import 'dart:convert';
 import 'profile_screen.dart'; 
-import 'api_key.dart'; // Ensure you have your API key here
-import 'package:http/http.dart' as http; // Add this
+import 'api_key.dart'; // Ensure this file exists
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -23,13 +22,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Form Controllers
   final _nameController = TextEditingController();
-  final _diseaseController = TextEditingController(); // NEW: Disease Field
+  final _diseaseController = TextEditingController();
   
   // Dropdown Logic
-  String? _selectedCondition; // NEW: Holds "Fit", "Moderate", or "Risky"
+  String? _selectedCondition; 
   final List<String> _conditionOptions = ['Fit', 'Moderate', 'Risky'];
 
-  // API Key (From api_key.dart or hardcoded)
+  // API Key 
   final String _apiKey = geminiApiKey; 
 
   @override
@@ -42,8 +41,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _listenAndAutoFill(StateSetter setDialogState) async {
     if (!_isListening) {
       bool available = await _speech.initialize(
-        onStatus: (status) => print('Status: $status'),
-        onError: (errorNotification) => print('Error: $errorNotification'),
+        onStatus: (status) => print('Mic Status: $status'),
+        onError: (error) => print('Mic Error: $error'),
       );
 
       if (available) {
@@ -57,10 +56,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (val.finalResult) {
               setDialogState(() {
                 _isListening = false;
-                _isAiProcessing = true;
+                _isAiProcessing = true; 
               });
               _stopListening();
-              _extractDataWithGemini(_voiceText); // Trigger AI
+              
+              // Pass the dialog's state setter to the AI
+              _extractDataWithGemini(_voiceText, setDialogState); 
             }
           },
           localeId: "hi_IN", 
@@ -77,76 +78,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isListening = false);
   }
 
-// --- 3. DIRECT API EXTRACTION (Hackathon-Proof Fix) ---
-  Future<void> _extractDataWithGemini(String spokenText) async {
+  // --- 3. DIRECT API EXTRACTION (With English Translation) ---
+  Future<void> _extractDataWithGemini(String spokenText, StateSetter setDialogState) async {
     if (spokenText.trim().isEmpty) return;
 
-    // 1. Show Loading Spinner
-    setState(() => _isAiProcessing = true);
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const Center(child: CircularProgressIndicator()),
-    );
+    setDialogState(() {
+      _isAiProcessing = true;
+      _diseaseController.text = "Translating..."; // Feedback to user
+    });
 
     try {
-      // 2. Prepare the Request (Directly to Google's Server)
-      final apiKey = _apiKey; 
+      // Using the model that worked for you
       final url = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey');
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$_apiKey');
 
       final headers = {'Content-Type': 'application/json'};
-      
-      // 3. The Prompt (Strict JSON)
       final body = jsonEncode({
-        "contents": [
-          {
-            "parts": [
+        "contents": [{
+          "parts": [{
+            "text": '''
+              Act as a medical data parser. Input: "$spokenText".
+              
+              Rules:
+              1. Extract the fields below.
+              2. TRANSLATE ALL VALUES TO ENGLISH if the input is in Hindi or mixed language.
+              3. Return strictly valid JSON.
+              
+              JSON Format:
               {
-                "text": '''
-                Act as a medical data parser.
-                Input: "$spokenText"
-                
-                Extract these fields and return strictly valid JSON:
-                {
-                  "name": "Patient Name (or Unknown)",
-                  "disease": "Symptoms or Disease mentioned",
-                  "condition": "Fit", "Moderate", or "Risky" (Choose based on severity)
-                }
-                
-                Do not add markdown formatting like ```json. Just return the raw JSON object.
-                '''
+                "name": "Patient Name (or Unknown)",
+                "disease": "Symptoms or Disease mentioned (In English)",
+                "condition": "Fit", "Moderate", or "Risky" (Choose based on severity)
               }
-            ]
-          }
-        ]
+              
+              Do not add markdown. Return ONLY the JSON object.
+            '''
+          }]
+        }]
       });
 
-      // 4. Send to Google
-      print("Sending request to Gemini...");
       final response = await http.post(url, headers: headers, body: body);
-      
-      // Close Loading Spinner
-      Navigator.pop(context);
 
       if (response.statusCode == 200) {
-        // 5. Parse the Response
         final jsonResponse = jsonDecode(response.body);
-        final text = jsonResponse['candidates'][0]['content']['parts'][0]['text'];
+        String text = jsonResponse['candidates'][0]['content']['parts'][0]['text'];
         
-        print("Raw AI Response: $text");
+        // Clean markdown
+        text = text.replaceAll('```json', '').replaceAll('```', '').trim();
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start != -1 && end != -1) text = text.substring(start, end + 1);
 
-        // Clean up any accidental Markdown
-        String cleanJson = text.replaceAll('```json', '').replaceAll('```', '').trim();
-        final data = jsonDecode(cleanJson);
+        final data = jsonDecode(text);
 
-        // 6. Update UI
-        setState(() {
+        // Update Popup UI
+        setDialogState(() {
           _nameController.text = data['name'] ?? "";
           _diseaseController.text = data['disease'] ?? "";
           
           String aiCondition = data['condition'] ?? "Moderate";
-          // Capitalize for dropdown match
           aiCondition = aiCondition[0].toUpperCase() + aiCondition.substring(1).toLowerCase();
           
           if (_conditionOptions.contains(aiCondition)) {
@@ -154,35 +144,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
           } else {
             _selectedCondition = "Moderate";
           }
-          _isAiProcessing = false;
+          _isAiProcessing = false; 
         });
-        
-      } else {
-        throw Exception("API Error: ${response.statusCode} - ${response.body}");
-      }
 
+      } else {
+        throw Exception("API Error: ${response.statusCode}");
+      }
     } catch (e) {
-      if (Navigator.canPop(context)) Navigator.pop(context); // Close spinner if open
-      print("❌ AI Error: $e");
-      
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text("Connection Error"),
-          content: Text("Could not connect to AI.\n\nDetails: $e"),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-        ),
-      );
-      setState(() => _isAiProcessing = false);
+      print("Extraction Error: $e");
+      setDialogState(() {
+         _diseaseController.text = "Error: $e";
+         _isAiProcessing = false;
+      });
     }
   }
-  // --- 4. AI ADVISOR (Analyzes Disease + Condition Level) ---
+
+  // --- 4. DIRECT API RISK ANALYSIS ---
   Future<void> _analyzeRiskAndSave(String name, String disease, String condition) async {
     // 1. Save to Firestore
     await FirebaseFirestore.instance.collection('patients').add({
       'name': name,
       'disease': disease,
-      'condition': condition, // Saved as "Fit", "Moderate", etc.
+      'condition': condition,
       'timestamp': FieldValue.serverTimestamp(),
     });
 
@@ -194,58 +177,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
 
     // 2. Ask Gemini for Advice
-    final model = GenerativeModel(model: 'gemini-pro', apiKey: _apiKey);
-    final prompt = '''
-      Patient: $name. 
-      Problem: $disease.
-      Severity Status: $condition.
-      
-      Provide medical advice. Return ONLY JSON:
-      {
-        "advice_en": "Short advice in English",
-        "advice_hi": "Short advice in Hindi"
-      }
-    ''';
-
     try {
-      final response = await model.generateContent([Content.text(prompt)]);
-      Navigator.pop(context); 
+      final url = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$_apiKey');
 
-      String cleanJson = response.text!.replaceAll('```json', '').replaceAll('```', '');
-      final data = jsonDecode(cleanJson);
+      final headers = {'Content-Type': 'application/json'};
+      final body = jsonEncode({
+        "contents": [{
+          "parts": [{
+            "text": '''
+              Patient: $name. Problem: $disease. Severity: $condition.
+              Provide short medical advice in English and Hindi.
+              Return JSON: {"advice_en": "...", "advice_hi": "..."}
+              Do not add markdown.
+            '''
+          }]
+        }]
+      });
 
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: Row(
-              children: [
-                // Icon changes based on the Dropdown selection
-                Icon(
-                  condition == "Risky" ? Icons.warning : (condition == "Moderate" ? Icons.info : Icons.check_circle), 
-                  color: condition == "Risky" ? Colors.red : (condition == "Moderate" ? Colors.orange : Colors.green)
-                ),
-                const SizedBox(width: 8),
-                Text("Status: $condition"),
-              ],
+      final response = await http.post(url, headers: headers, body: body);
+      Navigator.pop(context); // Close loading
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        String text = jsonResponse['candidates'][0]['content']['parts'][0]['text'];
+        
+        text = text.replaceAll('```json', '').replaceAll('```', '').trim();
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start != -1 && end != -1) text = text.substring(start, end + 1);
+
+        final data = jsonDecode(text);
+
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Row(
+                children: [
+                  Icon(
+                    condition == "Risky" ? Icons.warning : (condition == "Moderate" ? Icons.info : Icons.check_circle), 
+                    color: condition == "Risky" ? Colors.red : (condition == "Moderate" ? Colors.orange : Colors.green)
+                  ),
+                  const SizedBox(width: 8),
+                  Text("Status: $condition"),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("Disease: $disease", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  Text(data['advice_en'] ?? "No advice"),
+                  const Divider(),
+                  Text(data['advice_hi'] ?? "No advice", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                ],
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Disease: $disease", style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Text(data['advice_en']),
-                const Divider(),
-                Text(data['advice_hi'], style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-              ],
-            ),
-            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-          ),
-        );
-      }
+          );
+        }
+      } 
     } catch (e) {
-      Navigator.pop(context);
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
       print("Analysis Error: $e");
     }
   }
@@ -254,9 +249,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _showAddPatientDialog() {
     _nameController.clear();
     _diseaseController.clear();
-    _selectedCondition = null; // Reset Dropdown
+    _selectedCondition = null;
     _voiceText = "";
     _isAiProcessing = false;
+    
+    final TextEditingController debugInputController = TextEditingController();
 
     showDialog(
       context: context,
@@ -279,33 +276,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text(_isListening ? "Listening..." : (_isAiProcessing ? "AI Selecting..." : "Tap Mic to Speak")),
-                    if (_voiceText.isNotEmpty) 
-                      Padding(padding: const EdgeInsets.all(8.0), child: Text("Heard: \"$_voiceText\"", style: const TextStyle(fontSize: 12, color: Colors.grey))),
+                    Text(_isListening ? "Listening..." : (_isAiProcessing ? "AI Thinking..." : "Tap Mic to Speak")),
                     
-                    const SizedBox(height: 15),
+                    const Divider(height: 20),
                     
-                    // FIELD 1: NAME
+                    // MANUAL TEST BOX
+                    TextField(
+                      controller: debugInputController,
+                      decoration: InputDecoration(
+                        labelText: "Or type to test AI",
+                        hintText: "e.g., 'Raju has high fever'",
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.send, color: Colors.teal),
+                          onPressed: () {
+                             if(debugInputController.text.isNotEmpty) {
+                               FocusScope.of(context).unfocus();
+                               // CALL AI WITH DIALOG STATE
+                               _extractDataWithGemini(debugInputController.text, setDialogState);
+                             }
+                          },
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+
+                    const Divider(height: 20),
+
+                    // FIELDS
                     TextField(controller: _nameController, decoration: const InputDecoration(labelText: "Name", border: OutlineInputBorder())),
                     const SizedBox(height: 10),
                     
-                    // FIELD 2: DISEASE
-                    TextField(controller: _diseaseController, decoration: const InputDecoration(labelText: "Disease / Symptoms", border: OutlineInputBorder())),
+                    TextField(controller: _diseaseController, decoration: const InputDecoration(labelText: "Disease", border: OutlineInputBorder())),
                     const SizedBox(height: 10),
                     
-                    // FIELD 3: CONDITION DROPDOWN
                     DropdownButtonFormField<String>(
                       value: _selectedCondition,
                       decoration: const InputDecoration(labelText: "Condition", border: OutlineInputBorder()),
                       items: _conditionOptions.map((String value) {
-                        return DropdownMenuItem<String>(
-                          value: value,
-                          child: Text(value),
-                        );
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
                       }).toList(),
-                      onChanged: (newValue) {
-                        setDialogState(() => _selectedCondition = newValue);
-                      },
+                      onChanged: (newValue) => setDialogState(() => _selectedCondition = newValue),
                     ),
                   ],
                 ),
@@ -364,7 +374,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             itemCount: snapshot.data!.docs.length,
             itemBuilder: (ctx, index) {
               var data = snapshot.data!.docs[index].data();
-              String condition = data['condition'] ?? "Moderate"; // Default fallback
+              String condition = data['condition'] ?? "Moderate";
               
               return Card(
                 elevation: 3,
