@@ -19,6 +19,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isListening = false;
   String _voiceText = "";
   bool _isAiProcessing = false;
+  bool _isPregnant = false; // Add this line
 
   // Form Controllers
   final _nameController = TextEditingController();
@@ -160,16 +161,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // --- 4. DIRECT API RISK ANALYSIS ---
-  Future<void> _analyzeRiskAndSave(String name, String disease, String condition) async {
-    // 1. Save to Firestore
-    await FirebaseFirestore.instance.collection('patients').add({
-      'name': name,
-      'disease': disease,
-      'condition': condition,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+  Future<void> _analyzeRiskAndSave(String name, String disease, String condition, bool isPregnant) async {
+  // 1. Save to Firestore with the new 'is_pregnant' field
+  await FirebaseFirestore.instance.collection('patients').add({
+    'name': name,
+    'disease': disease,
+    'condition': condition,
+    'is_pregnant': isPregnant, // <--- SAVING THE FLAG
+    'timestamp': FieldValue.serverTimestamp(),
+  });
 
-    if (!mounted) return;
+  if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -317,6 +319,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       }).toList(),
                       onChanged: (newValue) => setDialogState(() => _selectedCondition = newValue),
                     ),
+                    const SizedBox(height: 10),
+
+// ADD THIS SWITCH
+SwitchListTile(
+  title: const Text("Is Patient Pregnant?"),
+  value: _isPregnant,
+  activeColor: Colors.purple,
+  onChanged: (val) {
+    setDialogState(() {
+      _isPregnant = val;
+    });
+  },
+),
                   ],
                 ),
               ),
@@ -324,11 +339,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
                 ElevatedButton(
                   onPressed: () {
-                    if (_nameController.text.isNotEmpty && _selectedCondition != null) {
-                      Navigator.pop(context); 
-                      _analyzeRiskAndSave(_nameController.text, _diseaseController.text, _selectedCondition!);
-                    }
-                  },
+  if (_nameController.text.isNotEmpty && _selectedCondition != null) {
+    Navigator.pop(context); 
+    // Pass _isPregnant here
+    _analyzeRiskAndSave(_nameController.text, _diseaseController.text, _selectedCondition!, _isPregnant);
+  }
+},
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
                   child: const Text("Save & Analyze"),
                 ),
